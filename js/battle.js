@@ -7,11 +7,18 @@
 //   3. 技は場に出ている子のすばやさ順に出る
 //   4. 倒れた子のプレイヤーは、控えがいれば次の子を選ぶ（強制交代。このときは相手は待つ）
 //   5. 相手のチームを全員倒したら勝ち
-import { typeEffect } from './rules.js';
+//
+// 技には使用回数（PP）がある。全部の技を使い切ると「わるあがき」（反動あり）しか出せない。
+//
+// 弱点（属性で決まる）を突くと ×2 で、相手の防御を 3/4 として計算する。
+// 長引くと（1体8・2体18・3体28ターン目から）「審判のいらだち」で、毎ターン全員の与ダメージが上がる。
+import {
+  typeMatch, skillPP, evadeChance, STRUGGLE, HEAL_RATIO, DRAIN_RATIO,
+  SUPER_MULT, SUPER_DEF_FACTOR, WEAK_MULT, AI_WEAKNESS_MULT, IRRITATION, irritationMult, irritationStart,
+} from './rules.js';
 
 export const DAMAGE_SCALE = 0.4;  // 威力 → ダメージの係数
 export const MAX_TURNS = 80;      // これを超えたら残りHP割合で判定
-const WEAKNESS_MULT = 1.25;       // 鑑定で決まった「苦手な属性」の追加倍率（相性表とは別に掛かる）
 const CRIT_RATE = 1 / 16;
 const SECONDARY_RATE = 0.3;       // 威力のある技の追加効果が出る確率
 const STUN_COOLDOWN = 3;          // しびれた後、しばらく再度しびれない（ハメ防止）
@@ -35,6 +42,8 @@ export function createBattle(teams, leads = [0, 0]) {
       stages: freshStages(),
       stunned: false,
       stunCooldown: 0,
+      pp: f.skills.map((s) => s.pp ?? skillPP(s)),
+      downed: false,
     }))),
     active: leads.map((l, i) => (l >= 0 && l < teams[i].length ? l : 0)),
     revealed: teams.map((t, i) => t.map((_, k) => k === (leads[i] ?? 0))),
@@ -81,6 +90,16 @@ export function resolveTurn(prev, teams, actions, names, rng = Math.random) {
   const nm = (i) => F(i).name;
   const speed = (i) => F(i).stats.spd * stageMult(St(i).stages.spd);
 
+  // 0. 審判のいらだち（長引くと、全員の与ダメージが毎ターン上がる）
+  const teamSize = b.teams[0].length;
+  const irritation = irritationMult(b.turn, teamSize);
+  const sinceStart = b.turn - irritationStart(teamSize);
+  if (sinceStart >= 0 && sinceStart % 3 === 0) {
+    const line = IRRITATION.lines[Math.min(IRRITATION.lines.length - 1, sinceStart / 3)];
+    say(`審判「${line}」`, { kind: 'judge', mult: irritation });
+    say(`審判の いらだちで ダメージが ${irritation.toFixed(2).replace(/0$/, '')}ばいに なった！`);
+  }
+
   // 1. 交代
   for (const i of [0, 1]) {
     const a = actions[i];
@@ -108,7 +127,7 @@ export function resolveTurn(prev, teams, actions, names, rng = Math.random) {
   for (const i of order) {
     if (b.over) break;
     const a = actions[i];
-    if (a?.kind !== 'skill') continue;
+    if (a?.kind !== 'skill' && a?.kind !== 'struggle') continue;
     const j = 1 - i;
     const me = St(i), foe = St(j);
     if (me.hp <= 0 || foe.hp <= 0) continue;
@@ -119,7 +138,14 @@ export function resolveTurn(prev, teams, actions, names, rng = Math.random) {
       continue;
     }
 
-    const skill = F(i).skills[a.index] ?? F(i).skills[0];
+    let skill;
+    if (a.kind === 'skill' && me.pp[a.index] > 0) {
+      skill = F(i).skills[a.index];
+      me.pp[a.index]--;
+    } else {
+      skill = STRUGGLE;
+      say(`${nm(i)}は だせる わざが ない！`);
+    }
     say(`${nm(i)}の ${skill.name}！`, { kind: 'use', side: i });
 
     const selfMove = skill.power === 0 && SELF_EFFECTS.includes(skill.effect);
@@ -127,33 +153,41 @@ export function resolveTurn(prev, teams, actions, names, rng = Math.random) {
       say(`しかし ${nm(j)}には あたらなかった！`, { kind: 'miss', side: j });
       continue;
     }
+    // 相手のほうが速ければ、その差に応じて かわされる
+    if (!selfMove && rng() < evadeChance(speed(j), speed(i))) {
+      say(`${nm(j)}は すばやく みをかわした！`, { kind: 'miss', side: j });
+      continue;
+    }
 
     let dealt = 0;
     if (skill.power > 0) {
       const atkType = skill.type || F(i).type;
-      let mult = typeEffect(atkType, F(j).type);
-      if (F(j).weakness && atkType === F(j).weakness) mult *= WEAKNESS_MULT;
+      const match = typeMatch(atkType, F(j).type);
+      let mult = match === 'super' ? SUPER_MULT : match === 'weak' ? WEAK_MULT : 1;
+      if (F(j).weakness && atkType === F(j).weakness) mult *= AI_WEAKNESS_MULT;
       const stab = atkType === F(i).type ? 1.2 : 1;
       const crit = rng() < CRIT_RATE;
       // 急所はこちらの攻撃ダウン・相手の防御アップを無視する
       const aStage = crit ? Math.max(0, me.stages.atk) : me.stages.atk;
       const dStage = crit ? Math.min(0, foe.stages.def) : foe.stages.def;
       const A = F(i).stats.atk * stageMult(aStage);
-      const D = F(j).stats.def * stageMult(dStage);
+      // 弱点を突くと、相手の防御を低く見て計算する（SUPER_DEF_FACTOR）
+      const D = F(j).stats.def * stageMult(dStage) * (match === 'super' ? SUPER_DEF_FACTOR : 1);
       const ratio = (A + 40) / (D + 40);
-      const raw = skill.power * DAMAGE_SCALE * ratio * mult * stab * (crit ? 1.5 : 1) * (0.85 + rng() * 0.15);
+      const raw = skill.power * DAMAGE_SCALE * ratio * mult * stab * irritation
+        * (crit ? 1.5 : 1) * (0.85 + rng() * 0.15);
       dealt = Math.min(foe.hp, Math.max(1, Math.floor(raw)));
       foe.hp -= dealt;
-      say(`${nm(j)}に ${dealt}の ダメージ！`, { kind: 'hit', side: j, hp: foe.hp, eff: mult > 1 ? 'super' : mult < 1 ? 'weak' : 'normal' });
+      say(`${nm(j)}に ${dealt}の ダメージ！`, { kind: 'hit', side: j, hp: foe.hp, eff: match });
       if (crit) say('きゅうしょに あたった！', { kind: 'crit', side: j });
-      if (mult > 1) say('こうかは ばつぐんだ！');
-      else if (mult < 1) say('こうかは いまひとつの ようだ……');
+      if (match === 'super') say('じゃくてんを ついた！ こうかは ばつぐんだ！');
+      else if (match === 'weak') say('こうかは いまひとつの ようだ……');
     }
 
     const triggers = skill.power === 0 || rng() < SECONDARY_RATE;
     switch (skill.effect) {
       case 'heal': {
-        const amount = skill.power > 0 ? Math.floor(dealt / 2) : Math.floor(me.maxHp * 0.35);
+        const amount = skill.power > 0 ? Math.floor(dealt * DRAIN_RATIO) : Math.floor(me.maxHp * HEAL_RATIO);
         const healed = Math.min(amount, me.maxHp - me.hp);
         if (healed > 0) {
           me.hp += healed;
@@ -185,15 +219,29 @@ export function resolveTurn(prev, teams, actions, names, rng = Math.random) {
         if (skill.power === 0) say('しかし なにも おこらなかった！');
     }
 
-    if (foe.hp <= 0) {
-      say(`${nm(j)}は たおれた！`, { kind: 'faint', side: j });
-      if (aliveCount(b, j) === 0) {
-        b.over = true;
-        b.winner = i;
-        say(`${names[j]}の うちの子は みんな たおれた！`);
-      } else {
-        b.need[j] = true;
+    // 反動（わるあがき）
+    if (skill.recoil && me.hp > 0) {
+      const r = Math.min(me.hp, Math.max(1, Math.ceil(me.maxHp * skill.recoil)));
+      me.hp -= r;
+      say(`${nm(i)}は はんどうで ${r}の ダメージを うけた！`, { kind: 'hit', side: i, hp: me.hp, eff: 'normal' });
+    }
+
+    // 倒れた判定（反動で自分が倒れることもある）
+    for (const s of [j, i]) {
+      const st = St(s);
+      if (st.hp <= 0 && !st.downed) {
+        st.downed = true;
+        say(`${nm(s)}は たおれた！`, { kind: 'faint', side: s });
       }
+    }
+    const wiped = [0, 1].map((s) => aliveCount(b, s) === 0);
+    if (wiped[0] || wiped[1]) {
+      b.over = true;
+      b.need = [false, false];
+      b.winner = wiped[0] && wiped[1] ? null : wiped[0] ? 1 : 0;
+      for (const s of [0, 1]) if (wiped[s]) say(`${names[s]}の うちの子は みんな たおれた！`);
+    } else {
+      for (const s of [0, 1]) if (St(s).hp <= 0) b.need[s] = true;
     }
   }
 

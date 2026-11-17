@@ -1,6 +1,6 @@
 // 鑑定結果 JSON の読み込み・検証・補正。
 // AI の出力は信用しない前提で、範囲外の値は丸め、足りない項目は補う。
-import { TYPES, EFFECTS, LIMITS, TYPE_ALIASES } from './rules.js';
+import { TYPES, EFFECTS, EFFECT_CODES, LIMITS, TYPE_ALIASES, skillPP } from './rules.js';
 
 const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, v));
 
@@ -28,52 +28,101 @@ const key = (s) => String(s ?? '').normalize('NFKC').toLowerCase()
   .replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
   .replace(/[\s　・.。、,]/g, '');
 
-/** 貼り付けられた文字列から JSON 部分を取り出す（```json ブロックや前後の文章に対応） */
-export const ENCODED_PREFIX = 'UCHINOKO1:';
+// ---------- 符号化 ----------
+// UCHINOKO2:<base64> … 簡略形式の JSON を deflate（raw）で圧縮して Base64 にしたもの（今の形式）
+// UCHINOKO1:<base64> … JSON をそのまま Base64 にしたもの（以前の形式。読み込みだけ対応）
+export const ENCODED_PREFIX = 'UCHINOKO2:';
 
-/** ネタバレ防止の "UCHINOKO1:<base64>" 形式を JSON 文字列に戻す */
-function decodeEncoded(t) {
-  const m = t.match(/UCHINOKO1\s*[:：]\s*([A-Za-z0-9+/=_\-\s]+)/);
+function b64ToBytes(b64) {
+  const clean = b64.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(clean + '='.repeat((4 - (clean.length % 4)) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+function bytesToB64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function pipeBytes(bytes, stream) {
+  const out = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+/** "UCHINOKO1/2:<base64>" を JSON 文字列に戻す。該当しなければ null */
+async function decodeEncoded(t) {
+  const m = t.match(/UCHINOKO([12])\s*[:：]\s*([A-Za-z0-9+/=_\-\s]+)/);
   if (!m) return null;
-  const b64 = m[1].replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
   try {
-    const bin = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
-    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    let bytes = b64ToBytes(m[2]);
+    if (m[1] === '2') bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'));
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
-    throw new Error('UCHINOKO1 形式の文字列を復元できませんでした。途中で切れていないか確認してください。');
+    throw new Error(`UCHINOKO${m[1]} 形式の文字列を復元できませんでした。途中で切れていないか、コピーしそこねていないか確認してください。`);
   }
 }
 
-export function encodeAppraisal(jsonText) {
-  const bytes = new TextEncoder().encode(jsonText);
-  let bin = '';
-  bytes.forEach((b) => { bin += String.fromCharCode(b); });
-  return ENCODED_PREFIX + btoa(bin);
+/** JSON 文字列を UCHINOKO2 形式にする（テスト用サンプルで使う） */
+export async function encodeAppraisal(jsonText) {
+  const bytes = await pipeBytes(new TextEncoder().encode(jsonText), new CompressionStream('deflate-raw'));
+  return ENCODED_PREFIX + bytesToB64(bytes);
 }
 
-export function extractJson(text) {
+/** 貼り付けられた文字列から JSON を取り出す（符号化、```json ブロック、前後の文章に対応） */
+export async function extractJson(text) {
   let t = String(text || '').trim();
-  const decoded = decodeEncoded(t);
+  const decoded = await decodeEncoded(t);
   if (decoded != null) t = decoded;
   const block = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = block ? block[1] : t;
-  const start = body.indexOf('{');
-  const end = body.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error('JSON が見つかりません。claude.ai の出力をそのまま貼り付けてください。');
+  const start = body.search(/[{[]/);
+  const end = Math.max(body.lastIndexOf('}'), body.lastIndexOf(']'));
+  if (start < 0 || end < start) throw new Error('鑑定結果が見つかりません。チャットAIの返答をそのまま貼り付けてください。');
   const slice = body.slice(start, end + 1)
-    .replace(/[“”]/g, '"')       // “ ” を " に
-    .replace(/,\s*([}\]])/g, '$1');         // 末尾カンマを除去
+    .replace(/[“”]/g, '"')                // “ ” を " に
+    .replace(/,\s*([}\]])/g, '$1');       // 末尾カンマを除去
   try {
     return JSON.parse(slice);
   } catch (e) {
-    throw new Error(`JSON の形式が正しくありません：${e.message}`);
+    throw new Error(`鑑定結果の形式が正しくありません：${e.message}`);
   }
+}
+
+// ---------- 簡略形式 → ふつうの形式 ----------
+// 簡略形式：{"o":"実況","f":[{"p":"名前","no":1,"n":"ファイター名","t":"草","s":[hp,atk,def,spd],
+//            "k":[["技名","属性",威力,命中,"効果略号","説明"], ...],"a":"鑑定コメント","v":"勝利台詞"}]}
+function expandFighter(x) {
+  if (!x || typeof x !== 'object' || !('p' in x)) return x; // すでにふつうの形式
+  const st = Array.isArray(x.s) ? x.s : [];
+  return {
+    player: x.p,
+    no: x.no,
+    name: x.n,
+    type: x.t,
+    stats: { hp: st[0], atk: st[1], def: st[2], spd: st[3] },
+    skills: (Array.isArray(x.k) ? x.k : []).map((k) => (Array.isArray(k)
+      ? { name: k[0], type: k[1], power: k[2], accuracy: k[3], effect: k[4], desc: k[5] }
+      : k)),
+    weakness: x.w,
+    appraisal: x.a,
+    victory_line: x.v,
+  };
+}
+
+function expandData(data) {
+  if (Array.isArray(data)) return { fighters: data.map(expandFighter) };
+  const list = data.f ?? data.fighters;
+  return {
+    opening_commentary: data.o ?? data.opening_commentary ?? data.commentary?.opening,
+    fighters: Array.isArray(list) ? list.map(expandFighter) : list,
+  };
 }
 
 function normSkill(raw, i, fighterType, warn, who) {
   const s = raw && typeof raw === 'object' ? raw : {};
   let effect = str(s.effect, 20, 'none').toLowerCase();
+  effect = EFFECT_CODES[effect] ?? effect;
   if (!EFFECTS.includes(effect)) {
     warn(`${who} の技${i + 1}「${s.name ?? '?'}」の effect "${s.effect}" は不明なので none にしました`);
     effect = 'none';
@@ -108,13 +157,14 @@ function normFighter(raw, playerName, no, teamSize, warn) {
   for (const k of ['hp', 'atk', 'def', 'spd']) {
     if (st[k] !== undefined && Number(st[k]) !== stats[k]) warn(`${who} の ${k} を範囲内（${stats[k]}）に補正しました`);
   }
-  const total = stats.atk + stats.def + stats.spd;
+  const total = stats.hp + stats.atk + stats.def + stats.spd;
   if (total > LIMITS.statTotal) {
     const r = LIMITS.statTotal / total;
-    stats.atk = Math.max(1, Math.floor(stats.atk * r));
-    stats.def = Math.max(1, Math.floor(stats.def * r));
-    stats.spd = Math.max(1, Math.floor(stats.spd * r));
-    warn(`${who} の atk+def+spd が ${total} で上限 ${LIMITS.statTotal} を超えたので比率を保って縮めました`);
+    stats.hp = Math.max(LIMITS.hp[0], Math.floor(stats.hp * r));
+    stats.atk = Math.max(LIMITS.stat[0], Math.floor(stats.atk * r));
+    stats.def = Math.max(LIMITS.stat[0], Math.floor(stats.def * r));
+    stats.spd = Math.max(LIMITS.stat[0], Math.floor(stats.spd * r));
+    warn(`${who} の hp+atk+def+spd が ${total} で上限 ${LIMITS.statTotal} を超えたので比率を保って縮めました`);
   }
 
   let skillsRaw = Array.isArray(f.skills) ? f.skills : [];
@@ -130,6 +180,8 @@ function normFighter(raw, playerName, no, teamSize, warn) {
     skills.forEach((s) => { s.power = Math.floor(s.power * r); });
     warn(`${who} の技の威力合計が ${powerSum} で上限 ${LIMITS.powerTotal} を超えたので縮めました`);
   }
+  // 使用回数はゲーム側のルールで決める（AI が pp を書いてきても使わない）
+  skills.forEach((s) => { s.pp = skillPP(s); });
 
   // 属性相性を活かすため、自分と違う属性の技が1〜2個あるのが望ましい（補正はせず警告だけ）
   if (!skills.some((s) => s.type !== type)) warn(`${who} の技が全部「${type}」属性です（指示文では1〜2個は別属性にするよう頼んでいます）`);
@@ -157,9 +209,9 @@ function normFighter(raw, playerName, no, teamSize, warn) {
  * @param {number} teamSize 1人あたりの うちの子の数
  * @returns {{ teams: object[][], warnings: string[], opening: string }}
  */
-export function parseAppraisal(text, playerNames, teamSize = 1) {
-  const data = extractJson(text);
-  const list = Array.isArray(data) ? data : data.fighters;
+export async function parseAppraisal(text, playerNames, teamSize = 1) {
+  const data = expandData(await extractJson(text));
+  const list = data.fighters;
   if (!Array.isArray(list) || list.length === 0) throw new Error('"fighters" 配列がありません。');
 
   const warnings = [];
@@ -188,39 +240,40 @@ export function parseAppraisal(text, playerNames, teamSize = 1) {
 
   const teams = playerNames.map(() => []);
   for (const s of slots) teams[s.pi][s.k] = normFighter(s.raw, s.name, s.k + 1, teamSize, warn);
-  const opening = str(data.opening_commentary ?? data.commentary?.opening, 200);
+  const opening = str(data.opening_commentary, 120);
   return { teams, warnings, opening };
 }
 
-/** テスト用：ランダムな鑑定結果を作る（UCHINOKO1 形式） */
-export function sampleAppraisal(playerNames, teamSize = 1) {
+/** テスト用：ランダムな鑑定結果を作る（UCHINOKO2 形式） */
+export async function sampleAppraisal(playerNames, teamSize = 1) {
   const pick = (a) => a[Math.floor(Math.random() * a.length)];
   const rnd = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
   const types = TYPES.filter((t) => t !== '無');
-  const fighters = [];
+  const f = [];
   for (const p of playerNames) {
     for (let no = 1; no <= teamSize; no++) {
-      const type = pick(types);
-      const other = pick(types.filter((t) => t !== type));
-      const atk = rnd(20, 110), def = rnd(20, 110), spd = Math.max(1, Math.min(120, 240 - atk - def - rnd(0, 40)));
-      fighters.push({
-        player: p,
-        no,
-        name: `${pick(['ねむれる', 'さすらいの', '伝説の', 'ちいさな', '怒れる'])}${pick(['もち', 'ポチ', 'タマ', 'ぷりん', 'ごろう'])}`,
-        type,
-        stats: { hp: rnd(60, 200), atk, def, spd },
-        skills: [
-          { name: `${type}のいぶき`, type, power: rnd(60, 100), accuracy: 90, effect: 'none', desc: `${type}の ちからを はきだす。` },
-          { name: `${other}まじりの一撃`, type: other, power: rnd(50, 90), accuracy: 95, effect: pick(['none', 'debuff']), desc: `なぜか ${other}属性。` },
-          { name: pick(['ねこじゃらし', 'にらみつける']), type: '無', power: 0, accuracy: 85, effect: pick(['debuff', 'stun']), desc: '相手の 気を そぐ。' },
-          { name: pick(['ひるね', 'きあいだめ']), type, power: 0, accuracy: 100, effect: pick(['heal', 'buff_atk', 'buff_def']), desc: '自分を ととのえる。' },
+      const t = pick(types);
+      const other = pick(types.filter((x) => x !== t));
+      // HP も含めて合計 LIMITS.statTotal 以内に収める
+      const hp = rnd(60, 200);
+      const left = LIMITS.statTotal - hp - rnd(0, 30);
+      const atk = rnd(20, Math.min(110, left - 40)), def = rnd(20, Math.min(110, left - atk - 20));
+      const spd = Math.max(1, Math.min(120, left - atk - def));
+      f.push({
+        p, no,
+        n: `${pick(['ねむれる', 'さすらいの', '伝説の', 'ちいさな', '怒れる'])}${pick(['もち', 'ポチ', 'タマ', 'ぷりん', 'ごろう'])}`,
+        t,
+        s: [hp, atk, def, spd],
+        k: [
+          [`${t}のいぶき`, t, rnd(60, 100), 90, 'n', `${t}の ちからを はく`],
+          [`${other}まじりの一撃`, other, rnd(50, 90), 95, pick(['n', 'db']), `なぜか ${other}属性`],
+          [pick(['ねこじゃらし', 'にらみつける']), '無', 0, 85, pick(['db', 'st']), '気を そぐ'],
+          [pick(['ひるね', 'きあいだめ']), t, 0, 100, pick(['h', 'ba', 'bd']), '自分を ととのえる'],
         ],
-        weakness: pick(types.filter((t) => t !== type)),
-        appraisal: pick(['……それ、強いの？ まあ、悪くはない。', '見た目より やる。', '油断すると 噛まれるタイプ。']),
-        victory_line: 'うちの子が いちばん つよい！',
-        win_commentary: `${p}のうちの子、見事な勝利です！`,
+        a: pick(['……それ、強いの？ まあ悪くない。', '見た目より やる。', '油断すると噛まれる。']),
+        v: 'うちの子が いちばん！',
       });
     }
   }
-  return encodeAppraisal(JSON.stringify({ opening_commentary: 'さあ、うちの子たちの 頂上決戦の はじまりだ！', fighters }));
+  return encodeAppraisal(JSON.stringify({ o: 'さあ、頂上決戦の はじまりだ！', f }));
 }

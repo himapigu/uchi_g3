@@ -4,7 +4,9 @@ import { HostNet, GuestNet, normalizeCode } from './net.js';
 import { fileToDataURL, textCard, buildCollage, downloadCanvas, requestText, slotLabel } from './media.js';
 import { parseAppraisal, sampleAppraisal } from './appraisal.js';
 import { createBattle, resolveTurn, resolveForced, canSwitchTo } from './battle.js';
-import { TYPE_COLORS, EFFECT_LABEL, LIMITS } from './rules.js';
+import {
+  TYPES, TYPE_COLORS, EFFECT_LABEL, LIMITS, STRUGGLE, typeMatch, weaknessesOf, irritationMult, irritationStart, IRRITATION,
+} from './rules.js';
 import { play, unlock, isMuted, setMuted } from './sfx.js';
 
 const MAX_PLAYERS = 2;
@@ -277,6 +279,8 @@ function viewFor(id) {
       ? { player: f.player, no: f.no, name: f.name, type: f.type, hidden: true }
       : { player: f.player, no: f.no, name: '？？？', type: null, hidden: true, unknown: true }
   ));
+  // 残り回数から技の威力が推測できてしまうので、相手の分は送らない
+  if (v.battle) v.battle.teams[opp].forEach((m) => { m.pp = null; });
   return v;
 }
 
@@ -365,8 +369,10 @@ function hostHandle(from, msg) {
       const a = msg.action || {};
       let action = null;
       if (a.kind === 'switch' && canSwitchTo(b, pi, Number(a.to))) action = { kind: 'switch', to: Number(a.to) };
-      else if (!forced && a.kind === 'skill' && Number.isInteger(a.index) && a.index >= 0 && a.index < LIMITS.skillCount) {
-        action = { kind: 'skill', index: a.index };
+      else if (!forced) {
+        const pp = b.teams[pi][b.active[pi]].pp;
+        if (a.kind === 'skill' && Number.isInteger(a.index) && pp[a.index] > 0) action = { kind: 'skill', index: a.index };
+        else if (a.kind === 'struggle' && pp.every((p) => p <= 0)) action = { kind: 'struggle' };
       }
       if (!action) return;
       H.actions[pi] = action;
@@ -664,21 +670,25 @@ MOUNT.appraise = () => {
       <p class="hint">画像を読めるチャットAIなら、どれでも使えます（Claude、ChatGPT、Gemini など）。</p>
       <ol class="steps">
         <li>
-          <button id="exportBtn" class="primary">鑑定用に書き出す（画像を保存）</button>
+          <button id="copyImg" class="primary">画像をコピー</button>
+          → チャットAIの入力欄で <b>Ctrl+V</b>（スマホは長押しで貼り付け）
+          <div class="hint">うまく貼れないときは <button id="saveImg" class="link">画像を保存</button> して添付してください。</div>
           <img id="collagePreview" class="collage" alt="" hidden>
         </li>
         <li>
-          <button id="copyReq">依頼文をコピー</button>
+          <button id="copyReq" class="primary">依頼文をコピー</button>
+          → 同じ入力欄に貼って送信
           <label class="check"><input type="checkbox" id="withInst"> 指示文も含める（AIのプロジェクト／カスタム指示に指示文を入れていない場合）</label>
           <div class="hint">指示文だけ欲しいときは <button id="copyPrompt" class="link">鑑定用の指示文をコピー</button></div>
         </li>
-        <li>チャットAIに、保存した画像を添付し、依頼文を貼って送信</li>
-        <li>返ってきた文字列（<code>UCHINOKO1:…</code> または JSON）をそのまま貼り付け
-          <div class="hint">中身はネタバレ防止のためぼかして表示します。</div>
-          <textarea id="jsonIn" class="secret" rows="5" spellcheck="false" placeholder="UCHINOKO1:eyJvcGVuaW5n..."></textarea>
+        <li>返ってきた <code>UCHINOKO2:…</code> の文字列をコピーして
           <div class="row">
-            <button id="parseBtn" class="primary">読み込む</button>
-            <button id="peekBtn" class="link">中身を表示</button>
+            <button id="readClip" class="primary">クリップボードから読み込む</button>
+          </div>
+          <div class="hint">または下の欄に貼り付け（貼った時点で自動で読み込みます）</div>
+          <textarea id="jsonIn" rows="3" spellcheck="false" placeholder="UCHINOKO2:..."></textarea>
+          <div class="row">
+            <button id="parseBtn">読み込む</button>
             <button id="sampleBtn" class="link">（テスト用）サンプルを入れる</button>
           </div>
         </li>
@@ -694,11 +704,28 @@ MOUNT.appraise = () => {
   if (!isHost()) return;
 
   const names = () => H.st.players.map((p) => p.name);
-  $('#exportBtn').addEventListener('click', async () => {
-    const canvas = await buildCollage(hostAction.groups());
-    $('#collagePreview').src = canvas.toDataURL('image/png');
-    $('#collagePreview').hidden = false;
-    await downloadCanvas(canvas, `uchinoko_${H.st.code}.png`);
+  let collage = null;
+  const getCollage = async () => {
+    if (!collage) {
+      collage = await buildCollage(hostAction.groups());
+      $('#collagePreview').src = collage.toDataURL('image/png');
+      $('#collagePreview').hidden = false;
+    }
+    return collage;
+  };
+  $('#copyImg').addEventListener('click', async () => {
+    try {
+      // ClipboardItem に Promise を渡すと、クリック直後の扱いのまま非同期で画像を作れる（Safari 対策）
+      const blob = getCollage().then((c) => new Promise((r) => c.toBlob(r, 'image/png')));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('画像をコピーしました。チャットAIの入力欄に貼り付けてください');
+    } catch {
+      toast('このブラウザでは画像をコピーできませんでした。保存して添付してください', 5000);
+      await downloadCanvas(await getCollage(), `uchinoko_${H.st.code}.png`);
+    }
+  });
+  $('#saveImg').addEventListener('click', async () => {
+    await downloadCanvas(await getCollage(), `uchinoko_${H.st.code}.png`);
   });
   $('#copyReq').addEventListener('click', async () => {
     let inst = '';
@@ -710,17 +737,11 @@ MOUNT.appraise = () => {
   $('#copyPrompt').addEventListener('click', async () => {
     try { copyText(await loadInstructions(), '指示文をコピーしました'); } catch { toast('指示文を読み込めませんでした（prompt/appraisal-instructions.md）'); }
   });
-  $('#sampleBtn').addEventListener('click', () => {
-    $('#jsonIn').value = sampleAppraisal(names(), H.st.teamSize);
-  });
-  $('#peekBtn').addEventListener('click', (e) => {
-    const shown = $('#jsonIn').classList.toggle('secret');
-    e.target.textContent = shown ? '中身を表示' : 'ぼかす';
-  });
-  $('#parseBtn').addEventListener('click', () => {
+
+  const load = async (text) => {
     const out = $('#parseResult');
     try {
-      H.parsed = parseAppraisal($('#jsonIn').value, names(), H.st.teamSize);
+      H.parsed = await parseAppraisal(text, names(), H.st.teamSize);
       // ホストもプレイヤーなので、ここでは中身を見せない
       const w = H.parsed.warnings;
       out.innerHTML = `
@@ -728,11 +749,28 @@ MOUNT.appraise = () => {
         ${w.length ? `<details class="warn"><summary>補正・注意が ${w.length} 件あります（ネタバレ注意）</summary>
           <ul>${w.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>` : ''}`;
       $('#revealBtn').disabled = false;
+      play('ok');
     } catch (e) {
       H.parsed = null;
       out.innerHTML = `<p class="error">${esc(e.message)}</p>`;
       $('#revealBtn').disabled = true;
     }
+  };
+  $('#readClip').addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      $('#jsonIn').value = text;
+      load(text);
+    } catch {
+      toast('クリップボードを読めませんでした。下の欄に貼り付けてください', 5000);
+      $('#jsonIn').focus();
+    }
+  });
+  $('#jsonIn').addEventListener('paste', () => setTimeout(() => load($('#jsonIn').value), 0));
+  $('#parseBtn').addEventListener('click', () => load($('#jsonIn').value));
+  $('#sampleBtn').addEventListener('click', async () => {
+    $('#jsonIn').value = await sampleAppraisal(names(), H.st.teamSize);
+    load($('#jsonIn').value);
   });
   $('#revealBtn').addEventListener('click', hostAction.reveal);
   $('#backSubmit').addEventListener('click', hostAction.backToSubmit);
@@ -788,10 +826,10 @@ function fighterCard(f, side, k, delay = 0, { leadPick = false } = {}) {
       <ul class="skills">
         ${f.skills.map((s) => `
           <li>${typeBadge(s.type)}<b>${esc(s.name)}</b>
-            <small>威力${s.power || '—'} 命中${s.accuracy}${EFFECT_LABEL[s.effect] ? `・${EFFECT_LABEL[s.effect]}` : ''}</small>
+            <small>威力${s.power || '—'} 命中${s.accuracy} 回数${s.pp}${EFFECT_LABEL[s.effect] ? `・${EFFECT_LABEL[s.effect]}` : ''}</small>
             ${s.desc ? `<div class="desc">${esc(s.desc)}</div>` : ''}</li>`).join('')}
       </ul>
-      ${f.weakness ? `<p class="weak">にがて：${typeBadge(f.weakness)}</p>` : ''}
+      <p class="weak">じゃくてん：${weaknessesOf(f.type).map(typeBadge).join('') || 'なし'}</p>
       <p class="appraisal"><span>審判</span>「${esc(f.appraisal)}」</p>
       ${leadPick ? `<button class="lead-btn" data-lead="${k}">この子を先発にする</button>` : ''}
     </article>`;
@@ -859,6 +897,35 @@ function infoBox(side, isMe) {
 
 const activeData = (side) => S.state.teams[side][S.view.active[side]];
 
+/** 属性相性表（行：攻撃する技の属性、列：受ける側の属性） */
+function typeChartHtml() {
+  const cell = (a, d) => {
+    const m = typeMatch(a, d);
+    return m === 'super' ? '<td class="c-super">◎</td>' : m === 'weak' ? '<td class="c-weak">△</td>' : '<td></td>';
+  };
+  return `
+    <div class="chart-box">
+      <div class="chart-head"><b>属性相性表</b><span>タップで閉じる</span></div>
+      <table class="type-chart">
+        <tr><th class="corner">技＼受け</th>${TYPES.map((t) => `<th>${typeBadge(t)}</th>`).join('')}</tr>
+        ${TYPES.map((a) => `<tr><th>${typeBadge(a)}</th>${TYPES.map((d) => cell(a, d)).join('')}</tr>`).join('')}
+      </table>
+      <p class="chart-note">◎ じゃくてん：ダメージ2倍、しかも相手の防御を3/4として計算<br>
+        △ いまひとつ：ダメージ半分<br>
+        技の属性と自分の属性が同じなら さらに1.2倍<br>
+        ${irritationStart(S.state.teamSize)}ターン目から「審判のいらだち」で、毎ターン与ダメージが +${Math.round(IRRITATION.step * 100)}%</p>
+    </div>`;
+}
+
+function renderIrritation(turn) {
+  const el = $('#irritation');
+  if (!el) return;
+  // battle.turn は「次のターン」の番号。いらだちは次のターンの最初に告げるので、表示は直前のターンの倍率
+  const m = irritationMult(turn - 1, S.state.teamSize);
+  el.hidden = m <= 1;
+  el.textContent = `審判のいらだち ダメージ×${m.toFixed(2).replace(/0$/, '')}`;
+}
+
 MOUNT.battle = () => {
   const st = S.state;
   const me = mySide(), foe = 1 - me;
@@ -870,26 +937,39 @@ MOUNT.battle = () => {
         <div class="spot foe"><div class="plate"></div><img class="sprite" data-side="${foe}" alt=""></div>
         <div class="spot me"><div class="plate"></div><img class="sprite" data-side="${me}" alt=""></div>
         ${infoBox(me, true)}
+        <div id="irritation" class="irritation" hidden></div>
       </div>
       <div class="console">
         <div class="msgbox"><p id="msg"></p></div>
         <div id="menu" class="menu" hidden></div>
         <div id="skillDesc" class="skill-desc" hidden></div>
+        <div class="console-foot"><button id="chartBtn" class="chart-btn">相性表</button></div>
       </div>
+      <div id="chart" class="chart-pop" hidden>${typeChartHtml()}</div>
     </section>`;
   for (const i of [0, 1]) syncSide(i, false);
+  renderIrritation(st.battle.turn);
+  $('#chartBtn').addEventListener('click', () => { $('#chart').hidden = !$('#chart').hidden; });
+  $('#chart').addEventListener('click', () => { $('#chart').hidden = true; });
 
   const b = st.battle;
   if (b.turn === 1 && !b.ready.some(Boolean) && !b.need.some(Boolean)) {
+    // 開始演出：くりだすまでは、うちの子の画像と体力表示を隠しておく
+    const parts = (side) => [$(`.sprite[data-side="${side}"]`), $(`.info[data-side="${side}"]`)];
+    for (const side of [0, 1]) parts(side).forEach((el) => el?.classList.add('unsent'));
+    const sendOut = (side) => {
+      parts(side).forEach((el) => el?.classList.remove('unsent'));
+      play('switchIn');
+      fx(side, 'enter');
+    };
     runAnimation(async () => {
       const pn = (i) => st.players[i].name;
       play('start');
-      await sleep(900);
-      play('switchIn');
-      fx(foe, 'enter');
+      setMsg(`${pn(foe)}が しょうぶを しかけてきた！`);
+      await sleep(1200);
+      sendOut(foe);
       await say(`${pn(foe)}は ${activeData(foe).name}を くりだした！`);
-      play('switchIn');
-      fx(me, 'enter');
+      sendOut(me);
       await say(myIndex() >= 0 ? `いけっ！ ${activeData(me).name}！` : `${pn(me)}は ${activeData(me).name}を くりだした！`);
     });
   }
@@ -940,11 +1020,15 @@ function showMenu(mi) {
   const canSwitch = S.view.teams[mi].some((_, k) => canSwitchTo(S.view, mi, k));
   setMsg(`${f.name}は どうする？`);
   menu.className = 'menu';
+  const pp = S.view.teams[mi][S.view.active[mi]].pp;
+  const allOut = pp.every((p) => p <= 0);
   menu.innerHTML = f.skills.map((s, k) => `
-    <button class="move" data-k="${k}" style="--tc:${TYPE_COLORS[s.type] || '#999'}">
+    <button class="move" data-k="${k}" style="--tc:${TYPE_COLORS[s.type] || '#999'}" ${pp[k] > 0 ? '' : 'disabled'}>
       <b>${esc(s.name)}</b>
       <small>${esc(s.type)}・威力${s.power || '—'}・命中${s.accuracy}${EFFECT_LABEL[s.effect] ? `・${EFFECT_LABEL[s.effect]}` : ''}</small>
+      <span class="pp ${pp[k] <= 0 ? 'out' : pp[k] <= Math.ceil(s.pp / 4) ? 'low' : ''}">のこり ${pp[k]}/${s.pp}</span>
     </button>`).join('')
+    + (allOut ? `<button class="struggle-btn">${esc(STRUGGLE.name)}（だせる わざが ない！）</button>` : '')
     + (S.state.teamSize > 1 ? `<button class="switch-btn" ${canSwitch ? '' : 'disabled'}>こうたい</button>` : '');
   menu.hidden = false;
   const desc = $('#skillDesc');
@@ -956,6 +1040,11 @@ function showMenu(mi) {
     btn.addEventListener('click', () => choose({ kind: 'skill', index: Number(btn.dataset.k) }));
   });
   $('.switch-btn', menu)?.addEventListener('click', () => showSwitch(mi, false, true));
+  const sb = $('.struggle-btn', menu);
+  if (sb) {
+    sb.addEventListener('mouseenter', () => { desc.textContent = STRUGGLE.desc; desc.hidden = false; });
+    sb.addEventListener('click', () => choose({ kind: 'struggle' }));
+  }
 }
 
 function showSwitch(mi, forced, fromMenu = false) {
@@ -1107,6 +1196,20 @@ async function playEvent(ev) {
         fx(a.side, 'faint');
         syncSide(a.side);
         break;
+      case 'judge': {
+        // 審判のいらだち：画面をゆらして倍率表示を更新
+        play('judge');
+        const arena = $('.arena');
+        arena?.classList.remove('rumble');
+        void arena?.offsetWidth;
+        arena?.classList.add('rumble');
+        const el = $('#irritation');
+        if (el) {
+          el.hidden = false;
+          el.textContent = `審判のいらだち ダメージ×${a.mult.toFixed(2).replace(/0$/, '')}`;
+        }
+        break;
+      }
     }
   }
   await say(ev.text);
@@ -1134,6 +1237,7 @@ function onTurn(msg) {
     for (const ev of msg.events) await playEvent(ev);
     S.view = clone(msg.state.battle);
     for (const i of [0, 1]) syncSide(i);
+    renderIrritation(msg.state.battle.turn);
     if (msg.state.phase === 'result') await sleep(1200);
   });
 }
@@ -1162,7 +1266,6 @@ MOUNT.result = () => {
         <h2 class="win-title">${esc(p.name)} のチーム</h2>
         <p class="owner">決めたのは ${esc(f.name)}${st.teamSize > 1 ? `（のこり ${left}/${st.teamSize}体）` : ''}</p>
         <blockquote class="victory">「${esc(f.victory_line)}」</blockquote>
-        ${f.win_commentary ? `<p class="commentary">実況「${esc(f.win_commentary)}」</p>` : ''}
         <p class="judge-final">審判「……うん、強かった。」</p>
         <div id="resultAction" class="row center"></div>
       </section>`;

@@ -13,6 +13,8 @@
 }
 
 * { box-sizing: border-box; }
+/* display を指定した要素でも hidden 属性で必ず消えるようにする（相性表・技メニューなど） */
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -319,3 +321,36 @@ code { font-family: monospace; background: #eee; padding: 0 4px; border-radius: 
 .top-right { display: flex; align-items: center; gap: 10px; }
 .mute-btn { padding: 2px 10px; font-size: 13px; border: 2px solid #fff; background: transparent; color: #fff; box-shadow: none; border-radius: 8px; }
 .mute-btn[aria-pressed="false"] { opacity: .6; }
+
+/* ---- 使用回数 ---- */
+.move .pp { font-size: 12px; color: var(--ink); align-self: flex-end; }
+.move .pp.low { color: var(--warn); font-weight: bold; }
+.move .pp.out { color: var(--err); }
+.move:disabled { opacity: .45; }
+.struggle-btn { grid-column: 1 / -1; background: #ffd9d0; box-shadow: 0 3px 0 #000; }
+
+/* ---- 相性表・審判のいらだち ---- */
+.console-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+.chart-btn { padding: 4px 12px; font-size: 13px; background: #fffdf0; box-shadow: 0 2px 0 #000; }
+.battle { position: relative; }
+.chart-pop { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0,0,0,.45); padding: 8px; cursor: pointer; }
+.chart-box { background: var(--panel); border: 3px solid var(--line); border-radius: 12px; padding: 10px; max-width: 100%; overflow-x: auto; }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.chart-head span { font-size: 12px; color: var(--sub); }
+.type-chart { border-collapse: collapse; font-size: 13px; }
+.type-chart th, .type-chart td { border: 1px solid #ccc; text-align: center; padding: 2px; min-width: 28px; height: 26px; }
+.type-chart th .type { margin: 0; padding: 0 4px; }
+.type-chart .corner { font-size: 10px; color: var(--sub); white-space: nowrap; }
+.type-chart .c-super { background: #ffe1d8; color: #c0392b; font-weight: bold; }
+.type-chart .c-weak { background: #e3ecf7; color: #3e6db0; }
+.chart-note { font-size: 12px; color: var(--sub); margin: 8px 0 0; }
+.irritation {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); z-index: 5;
+  background: #2b2b2b; color: #ff9b7d; font-size: 13px; padding: 2px 10px; border-radius: 10px; white-space: nowrap;
+}
+.arena.rumble { animation: rumble .5s; }
+@keyframes rumble { 20% { transform: translate(-4px, 2px); } 40% { transform: translate(4px, -2px); } 60% { transform: translate(-3px, 1px); } 80% { transform: translate(3px, -1px); } }
+@media (max-width: 520px) { .type-chart { font-size: 11px; } .type-chart th, .type-chart td { min-width: 24px; height: 22px; } }
+
+/* ---- 開始演出：くりだす前は隠す ---- */
+.sprite.unsent, .info.unsent { visibility: hidden; }
