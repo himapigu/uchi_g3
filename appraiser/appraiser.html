@@ -1,0 +1,494 @@
+<title>うちの子 鑑定室</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=M+PLUS+1p:wght@400;700&display=swap">
+<style>
+/* 一本の縦長カード。上から「貼る → 鑑定 → 持ち帰る」。審判の顔だけが目立つ */
+:root {
+  --bg: #eef0f4;
+  --panel: #ffffff;
+  --ink: #1d2230;
+  --muted: #5d6578;
+  --line: #d4d8e2;
+  --accent: #2f5bd9;
+  --accent-ink: #ffffff;
+  --ok: #1f8a4c;
+  --ok-bg: #e3f4ea;
+  --warn: #a35a00;
+  --warn-bg: #fdf0dc;
+  --err: #b42318;
+  --err-bg: #fde8e6;
+  --zone: #f6f7fa;
+  --face: #1d2230;
+  --eye: #ffd23f;
+  --font-display: "DotGothic16", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", monospace;
+  --font-body: "M PLUS 1p", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151d; --panel: #1b1f2a; --ink: #e8ebf2; --muted: #a2a9ba; --line: #2e3442;
+    --accent: #7c9cff; --accent-ink: #0d1020; --ok: #5fd08f; --ok-bg: #173325;
+    --warn: #f0b45c; --warn-bg: #3a2a12; --err: #ff8a80; --err-bg: #3d1a18;
+    --zone: #161a23; --face: #0b0d13; --eye: #ffd23f; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151d; --panel: #1b1f2a; --ink: #e8ebf2; --muted: #a2a9ba; --line: #2e3442;
+  --accent: #7c9cff; --accent-ink: #0d1020; --ok: #5fd08f; --ok-bg: #173325;
+  --warn: #f0b45c; --warn-bg: #3a2a12; --err: #ff8a80; --err-bg: #3d1a18;
+  --zone: #161a23; --face: #0b0d13; --eye: #ffd23f; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.7;
+  padding-block: 24px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 640px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; align-items: center; gap: 16px; }
+.face {
+  flex: none; width: 64px; height: 52px; border-radius: 10px; background: var(--face);
+  display: flex; align-items: center; justify-content: center; gap: 12px; position: relative; overflow: hidden;
+}
+.face i { width: 10px; height: 14px; background: var(--eye); border-radius: 2px; }
+.face.busy::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 3px; background: var(--eye); opacity: .7;
+  animation: scan 1.4s linear infinite;
+}
+@keyframes scan { from { top: -3px; } to { top: 52px; } }
+h1 { font-family: var(--font-display); font-weight: 400; font-size: 26px; line-height: 1.3; margin: 0; text-wrap: balance; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 12px; }
+.card h2 { font-family: var(--font-display); font-weight: 400; font-size: 17px; margin: 0; display: flex; gap: 10px; align-items: baseline; }
+.card h2 .n { color: var(--accent); }
+.hint { color: var(--muted); font-size: 13px; margin: 0; }
+
+.zone {
+  border: 2px dashed var(--line); border-radius: 12px; background: var(--zone);
+  min-height: 132px; padding: 18px; display: grid; place-items: center; text-align: center;
+  cursor: text; outline: none; caret-color: transparent; color: var(--muted);
+  font-family: var(--font-display); font-size: 16px; line-height: 1.6;
+  -webkit-user-modify: read-write-plaintext-only;
+}
+.zone:focus-visible, .zone.focus { border-color: var(--accent); color: var(--ink); }
+.zone.drag { border-style: solid; border-color: var(--accent); }
+.zone kbd { font-family: var(--font-display); border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 0 6px; background: var(--panel); }
+
+.slots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 460px) { .slots { grid-template-columns: 1fr; } }
+.slot { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.slot .label { font-size: 12px; letter-spacing: .06em; color: var(--muted); }
+.slot .state { font-weight: 700; }
+.slot .detail { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.slot.got { border-color: var(--ok); background: var(--ok-bg); }
+.slot.got .state { color: var(--ok); }
+
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+button {
+  font: inherit; font-weight: 700; border-radius: 10px; padding: 10px 18px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.big { font-size: 17px; padding: 12px 24px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button.link { border: none; background: none; padding: 0; color: var(--accent); font-weight: 400; text-decoration: underline; }
+
+.msg { border-radius: 10px; padding: 10px 12px; margin: 0; font-size: 14px; }
+.msg.ok { background: var(--ok-bg); color: var(--ok); }
+.msg.warn { background: var(--warn-bg); color: var(--warn); }
+.msg.err { background: var(--err-bg); color: var(--err); }
+.status { font-family: var(--font-display); font-size: 16px; margin: 0; min-height: 1.6em; }
+.code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted);
+  background: var(--zone); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  overflow-wrap: anywhere; margin: 0;
+}
+textarea.fallback {
+  width: 100%; min-height: 90px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  background: var(--zone); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+}
+details { font-size: 13px; color: var(--muted); }
+details summary { cursor: pointer; }
+details ul { margin: 6px 0 0; padding-left: 1.2em; }
+@media (prefers-reduced-motion: reduce) { .face.busy::after { animation: none; top: 24px; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="face" id="face" aria-hidden="true"><i></i><i></i></div>
+    <div>
+      <h1>うちの子 鑑定室</h1>
+      <p class="sub">……それ、強いの？　ホスト専用。貼られた画像と文章は、この画面には出しません。</p>
+    </div>
+  </header>
+
+  <section class="card" aria-labelledby="h-paste">
+    <h2 id="h-paste"><span class="n">1</span>ゲームからコピーして、ここに貼る</h2>
+    <p class="hint">ゲームの鑑定画面で「鑑定室用にまとめてコピー」を押し、この枠に1回貼り付けてください（コピー時のプレビューにも中身は出ません）。「画像をコピー」と「依頼文をコピー」を1つずつ貼っても使えます。</p>
+    <div id="zone" class="zone" contenteditable="true" spellcheck="false" role="textbox" aria-label="貼り付け先" tabindex="0">
+      <div>ここをクリックして <kbd>Ctrl</kbd>+<kbd>V</kbd><br><span style="font-size:13px">スマホは長押しして「貼り付け」／画像ファイルのドロップも可</span></div>
+    </div>
+    <div class="slots">
+      <div class="slot" id="slotImg"><span class="label">コラージュ画像</span><span class="state">まだです</span><span class="detail">「画像をコピー」したものを貼る</span></div>
+      <div class="slot" id="slotReq"><span class="label">依頼文</span><span class="state">まだです</span><span class="detail">「依頼文をコピー」したものを貼る</span></div>
+    </div>
+    <div class="row">
+      <button class="link" id="pickBtn" type="button">画像をファイルから選ぶ</button>
+      <input type="file" id="pickFile" accept="image/png,image/jpeg,image/webp" hidden>
+      <button class="link" id="clearBtn" type="button">貼ったものを消す</button>
+    </div>
+    <p class="msg err" id="pasteErr" hidden></p>
+  </section>
+
+  <section class="card" aria-labelledby="h-run">
+    <h2 id="h-run"><span class="n">2</span>Claude に鑑定してもらう</h2>
+    <p class="hint">あなたの Claude の利用枠を使います。初回だけ、使ってよいか確認が出ます。鑑定には30秒〜2分ほどかかります。</p>
+    <div class="row">
+      <button class="primary big" id="runBtn" type="button" disabled>鑑定する</button>
+      <button id="stopBtn" type="button" hidden>止める</button>
+    </div>
+    <p class="status" id="status" aria-live="polite"></p>
+    <p class="msg err" id="runErr" hidden></p>
+  </section>
+
+  <section class="card" aria-labelledby="h-out">
+    <h2 id="h-out"><span class="n">3</span>結果をゲームに持ち帰る</h2>
+    <p class="hint">「結果をコピー」を押してから、ゲームで「クリップボードから読み込む」を押してください。中身は暗号のような文字列なので、ここでは読めません。</p>
+    <div id="outBox" hidden>
+      <p class="msg ok" id="outMsg"></p>
+      <p class="msg warn" id="outWarn" hidden></p>
+      <div class="row">
+        <button class="primary big" id="copyBtn" type="button">結果をコピー</button>
+        <button id="againBtn" type="button">もう一度鑑定する</button>
+      </div>
+      <p class="code" id="outCode"></p>
+      <textarea class="fallback" id="fallback" readonly hidden aria-label="鑑定結果の文字列"></textarea>
+    </div>
+    <p class="hint" id="outEmpty">鑑定が終わると、ここにコピー用のボタンが出ます。</p>
+  </section>
+
+  <details>
+    <summary>この画面について</summary>
+    <ul>
+      <li>貼った画像と依頼文は、このブラウザの中だけで持ち、鑑定のときに Claude へ送ります。どこにも保存しません。</li>
+      <li>Claude の返答は画面に出さず、ゲーム用の <code>UCHINOKO2:</code> 形式に圧縮してから渡します。</li>
+      <li>ゲームの「指示文も含める」にチェックが入っていても問題ありません（鑑定の指示はこの画面に入っています）。</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+(() => {
+  // ---------- 鑑定の指示（prompt/appraisal-instructions.md から出力ルールだけ差し替えたもの） ----------
+  const INSTRUCTIONS = `あなたはブラウザ対戦ゲーム「うちの子がいちばん強い」の審判AIです。
+口ぐせは「……それ、強いの？」。少し冷めていて、それでも根は愛のある鑑定士として振る舞ってください。
+
+## あなたの仕事
+プレイヤーが提出した「うちの子」（ペット、ぬいぐるみ、自作キャラ、身の回りの物、文章で語られた何か）を鑑定し、バトル用のファイターデータに変換します。
+入力は次の2つです。
+- コラージュ画像1枚：各プレイヤーの提出物が、名前ラベルつきで並んでいます。1人が複数体を出すときは「たろう #1」「たろう #2」のように番号がつきます（1行が1人分のチーム）。
+- 依頼文：参加者の名前、1人あたりの体数、文章で提出された「うちの子」の全文。
+1人あたり1〜3体のチーム戦です。1体ずつ別のファイターとして鑑定してください。
+
+## 鑑定の方針
+これはジョーク寄りのパーティーゲームです。厳密なバランスより、笑えて納得感のある鑑定を優先してください。
+- 数値は個性をはっきり出す。力自慢、打たれ強い、すばしっこい、器用貧乏など、どこを尖らせるかはその子の見た目やエピソードから決めてください。下の見本の数値・型を真似せず、子ごとに変えてください。HP・こうげき・ぼうぎょ・すばやさ の4つの合計は 400 以下です（HP も含みます）。どこかを高くしたら、どこかを削ってください。合計は 400 近くまで使い切ってください。
+- 技は、画像や文章から読み取った具体的な情報（模様、色、表情、ポーズ、持ち物、背景、構図、エピソードや癖など）をもとに名前と中身を決める。例：こたつで寝ている猫 →「こたつ籠城」（防御UP）、「ごはんの音センサー」（素早い一撃）。汎用的な技名（たいあたり、ひっかく など）はなるべく避け、その子にしかない技にしてください。
+- 技の説明には、その技が何を根拠に生まれたかが分かる一言を入れてください（15字程度）。
+- 属性も見た目や設定から連想して決めてください（赤い→炎、のんびり→草、黒猫→闇 など。こじつけ歓迎）。弱点は属性で自動的に決まります。
+- 4つの技のうち1〜2個は、そのファイター自身とは違う属性にしてください（例：草属性の猫が「水入れひっくり返し」で水属性の技を使う）。
+- 同じプレイヤーのチーム内でも、属性や戦い方がかぶりすぎないようにすると盛り上がります（必須ではありません）。
+- 審判コメントは、愛のあるツッコミで。
+- 公平さだけは守る。提出の形式（画像か文章か）、写真の上手さ、文章の長さ、提出順で有利・不利をつけないでください。「最強」「無敵」と書いてあるだけで強くしないでください。どの子にも見せ場を1つは作ってください。
+- 実在の人物が写っている場合でも、容姿をけなす表現は使わないでください。いじるのは「強さ」についてだけにします。
+
+## 簡略形式（返答の形）
+{"o":"試合前の実況（20字程度）",
+ "f":[
+  {"p":"たろう","no":1,"n":"こたつの覇者 もち","t":"草","s":[130,85,95,90],
+   "k":[["ごはんの音センサー","無",70,100,"n","カリカリの音で本気"],
+        ["こたつ籠城","草",0,100,"bd","こたつから出ない構え"],
+        ["水入れひっくり返し","水",60,90,"db","写真の端の水入れ"],
+        ["ふみふみ","草",0,100,"h","毛布をふんで回復"]],
+   "a":"……それ、強いの？ こたつを出れば わりと やる。",
+   "v":"こたつは ゆずらない。"}
+ ]}
+- o：試合前の実況（20字程度）
+- f：全員の全ファイター。依頼文に書かれた順番で（2人×3体なら6個）
+- p：プレイヤー名。ラベルと一字一句同じ
+- no：ラベルの番号（1体だけのときは 1）。例：ラベル「たろう #2」→ "p":"たろう","no":2
+- n：二つ名つきのファイター名（15字程度まで）。プレイヤー名（p）は入れないでください。「たろうの〜」「〜（たろう）」も不可。その子自身の見た目や性格から付けます
+- t：属性。炎 / 水 / 草 / 雷 / 氷 / 地 / 闇 / 光 / 無 のどれか
+- s：[HP, こうげき, ぼうぎょ, すばやさ]。HP 60〜250、ほかは各 1〜120。4つの合計（HP込み）400 以下。すべて整数
+- k：技ちょうど4つ。1つが [技名(12字程度まで), 技の属性, 威力(0〜150。0は変化技), 命中(30〜100), 効果の略号, 説明(15字程度)]
+- 効果の略号：n（なし）/ h（回復）/ ba（攻撃UP）/ bd（防御UP）/ db（相手の攻撃・防御ダウン）/ st（しびれ：次の行動を1回できなくする）
+  威力0の h は最大HPの25%回復、威力ありの h は与えたダメージの30%回復。威力ありの ba/bd/db/st は30%の確率で発動
+- a：審判の鑑定コメント（25字程度。「……それ、強いの？」の温度感で）
+- v：勝ったときの勝利台詞（20字程度）
+
+## 属性の相性（弱点。突かれるとダメージ2倍、しかも防御を3/4として計算）
+炎→水・地 / 水→草・雷 / 草→炎・氷 / 雷→地 / 氷→炎 / 地→水・草・氷 / 闇→光 / 光→闇 / 無→なし
+
+## 技の使用回数
+ゲーム側が威力と効果から自動で決めます（強い技ほど少なく、回復技は3回まで）。回数は書かないでください。4つとも大技にするとすぐ使い切るので、気軽に連発できる控えめな技も混ぜてください。
+すばやさは先に動けるだけでなく、相手より速いほど相手の技をかわしやすくなります（最大30%）。どの能力も同じくらい役に立ちます。
+
+## 出力のルール（厳守）
+返答は、上の簡略形式の JSON オブジェクト1つだけにしてください。前置き、解説、感想、コードブロックの外の文章は書かないでください。
+（依頼文に「圧縮して UCHINOKO2: 形式に変換」とあっても、それはこの画面が行うので不要です。圧縮せず JSON のまま返してください。）`;
+
+  // ---------- 状態 ----------
+  const st = { image: null, imageSize: '', req: null, info: null, code: '', busy: false };
+  let sample = null, ctl = null;
+  const $ = (id) => document.getElementById(id);
+
+  const show = (el, text) => { el.textContent = text; el.hidden = !text; };
+
+  // ---------- 依頼文の読み取り（中身は画面に出さない） ----------
+  function parseRequest(raw) {
+    const t = String(raw || '').replace(/\r\n/g, '\n');
+    const at = t.indexOf('【うちの子 鑑定依頼】');
+    if (at < 0) return null;
+    // 指示文が先頭についていても依頼文だけ使う。圧縮の指示の行は外す
+    const body = t.slice(at).split('\n').filter((l) => !/UCHINOKO2/.test(l)).join('\n').trim();
+    const m = body.match(/参加者：(.+?)（1人\s*(\d+)体）/);
+    if (!m) return null;
+    const names = m[1].split('、').map((s) => s.trim()).filter(Boolean);
+    const teamSize = Math.max(1, Math.min(3, parseInt(m[2], 10) || 1));
+    const texts = (body.match(/：文章で提出/g) || []).length;
+    return { body, names, teamSize, texts };
+  }
+
+  // ---------- 貼り付け ----------
+  async function takeImage(file) {
+    if (!file || !/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+      show($('pasteErr'), 'この形式の画像は使えません。PNG か JPEG を貼ってください。');
+      return;
+    }
+    st.image = file;
+    st.imageSize = '';
+    try {
+      const bmp = await createImageBitmap(file);
+      st.imageSize = `${bmp.width}×${bmp.height}`;
+      bmp.close?.();
+    } catch { /* 大きさが分からなくても続ける */ }
+    show($('pasteErr'), '');
+    render();
+  }
+
+  // ゲームの「鑑定室用にまとめてコピー」：画像と依頼文を base64 にした文字列
+  async function takePack(text) {
+    try {
+      const bin = atob(text.trim().replace(/^UCHINOKO-PACK1\s*:/, '').replace(/\s+/g, ''));
+      const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+      const pack = JSON.parse(new TextDecoder().decode(bytes));
+      const blob = await (await fetch(pack.i)).blob();
+      takeText(pack.r);
+      await takeImage(new File([blob], 'collage.png', { type: blob.type || 'image/png' }));
+    } catch {
+      show($('pasteErr'), 'まとめてコピーした文字列を読めませんでした。ゲームでもう一度コピーしてください。');
+    }
+  }
+
+  function takeText(text) {
+    if (/^\s*UCHINOKO-PACK1\s*:/.test(text)) { takePack(text); return; }
+    const info = parseRequest(text);
+    if (!info) {
+      if (/UCHINOKO[12]\s*[:：]/.test(text)) {
+        show($('pasteErr'), 'それは鑑定結果の文字列です。ゲームの「依頼文をコピー」で出る文章を貼ってください。');
+      } else {
+        show($('pasteErr'), '依頼文として読めませんでした。ゲームの「依頼文をコピー」を押してから貼ってください。');
+      }
+      return;
+    }
+    st.req = info.body;
+    st.info = info;
+    show($('pasteErr'), '');
+    render();
+  }
+
+  function handleData(dt) {
+    let handled = false;
+    const files = [...(dt?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (!files.length && dt?.items) {
+      for (const it of dt.items) {
+        if (it.kind === 'file' && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) files.push(f); }
+      }
+    }
+    if (files.length) { takeImage(files[0]); handled = true; }
+    const text = dt?.getData?.('text/plain') || '';
+    if (text.trim()) { takeText(text); handled = true; }
+    if (!handled) show($('pasteErr'), '貼り付けた中身が空でした。ゲームでもう一度コピーしてください。');
+  }
+
+  const zone = $('zone');
+  const blankZone = zone.innerHTML;
+  // 何も入力させない：貼り付けとドロップだけを受け取り、枠の中身は元に戻す
+  document.addEventListener('paste', (e) => {
+    e.preventDefault();
+    if (st.busy) return;
+    handleData(e.clipboardData);
+    zone.innerHTML = blankZone;
+  });
+  zone.addEventListener('beforeinput', (e) => e.preventDefault());
+  zone.addEventListener('input', () => { zone.innerHTML = blankZone; });
+  zone.addEventListener('keydown', (e) => {
+    const isPaste = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v';
+    if (!isPaste && !['Tab', 'Shift', 'Control', 'Meta'].includes(e.key)) e.preventDefault();
+  });
+  zone.addEventListener('focus', () => zone.classList.add('focus'));
+  zone.addEventListener('blur', () => zone.classList.remove('focus'));
+  ['dragenter', 'dragover'].forEach((t) => zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach((t) => zone.addEventListener(t, () => zone.classList.remove('drag')));
+  zone.addEventListener('drop', (e) => { e.preventDefault(); if (!st.busy) handleData(e.dataTransfer); zone.innerHTML = blankZone; });
+
+  $('pickBtn').addEventListener('click', () => $('pickFile').click());
+  $('pickFile').addEventListener('change', (e) => { const f = e.target.files?.[0]; if (f) takeImage(f); e.target.value = ''; });
+  $('clearBtn').addEventListener('click', () => {
+    if (st.busy) return;
+    Object.assign(st, { image: null, imageSize: '', req: null, info: null, code: '' });
+    show($('pasteErr'), ''); show($('runErr'), ''); $('status').textContent = '';
+    render();
+  });
+
+  // ---------- 画面 ----------
+  function render() {
+    const si = $('slotImg'), sr = $('slotReq');
+    si.classList.toggle('got', !!st.image);
+    si.querySelector('.state').textContent = st.image ? '受け取りました' : 'まだです';
+    si.querySelector('.detail').textContent = st.image
+      ? `${st.imageSize || '大きさ不明'}・${Math.round(st.image.size / 1024)} KB（中身は表示しません）`
+      : '「画像をコピー」したものを貼る';
+    sr.classList.toggle('got', !!st.info);
+    sr.querySelector('.state').textContent = st.info ? '受け取りました' : 'まだです';
+    sr.querySelector('.detail').textContent = st.info
+      ? `${st.info.names.join('・')}／1人 ${st.info.teamSize}体${st.info.texts ? `（文章の提出 ${st.info.texts}件）` : ''}`
+      : '「依頼文をコピー」したものを貼る';
+
+    $('runBtn').disabled = st.busy || !st.image || !st.info || !sample;
+    $('stopBtn').hidden = !st.busy;
+    $('face').classList.toggle('busy', st.busy);
+    $('outBox').hidden = !st.code;
+    $('outEmpty').hidden = !!st.code;
+  }
+
+  // ---------- 符号化（ゲームの js/appraisal.js と同じ UCHINOKO2 形式） ----------
+  async function encode(jsonText) {
+    const stream = new Blob([new TextEncoder().encode(jsonText)]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return 'UCHINOKO2:' + btoa(bin);
+  }
+
+  const norm = (s) => String(s ?? '').normalize('NFKC').toLowerCase().replace(/[\s　]/g, '');
+
+  // 中身を見せずに、数と名前だけ確かめる
+  function check(data) {
+    const list = Array.isArray(data) ? data : data?.f ?? data?.fighters;
+    if (!Array.isArray(list) || !list.length) return { fatal: '鑑定結果にファイターが入っていませんでした。' };
+    const need = st.info.names.length * st.info.teamSize;
+    if (list.length < need) return { fatal: `鑑定結果が ${list.length}体分しかありません（${need}体分 必要です）。` };
+    const notes = [];
+    if (list.length > need) notes.push(`${list.length - need}体分 多く返ってきました（ゲームが余りを無視します）`);
+    const names = new Set(st.info.names.map(norm));
+    const strange = list.filter((f) => f && !names.has(norm(f.p ?? f.player))).length;
+    if (strange) notes.push(`名前がラベルと一致しない子が ${strange}体います（ゲームが順番で割り当てます）`);
+    const badSkills = list.filter((f) => !Array.isArray(f?.k ?? f?.skills) || (f.k ?? f.skills).length !== 4).length;
+    if (badSkills) notes.push(`技が4つそろっていない子が ${badSkills}体います（ゲームが補います）`);
+    return { count: list.length, notes };
+  }
+
+  const ERR = {
+    not_granted: 'この画面で Claude を使うことが許可されていません。アーティファクトの権限から許可してください。',
+    sampling_disabled: 'このアカウントでは、ここから Claude を使えません。',
+    rate_limited: 'Claude の利用が混み合っているか、利用枠の上限に達しました。少し待ってからもう一度押してください。',
+    session_expired: 'claude.ai のログインが切れています。ログインし直してから押してください。',
+    image_rejected: '画像を受け付けてもらえませんでした。ゲームで「画像を保存」して、その画像を選び直してください。',
+    images_unavailable: 'この表示環境では画像を送れません。ブラウザの claude.ai で開いてください。',
+    refused: 'Claude が鑑定を断りました。提出内容を見直してください。',
+    invalid_json: '返答をうまく読み取れませんでした。もう一度鑑定してください。',
+    empty_completion: '返答が空でした。もう一度鑑定してください。',
+    prompt_too_large: '依頼文が長すぎます。文章の提出を短くしてください。',
+  };
+
+  async function run(fresh) {
+    if (!sample || !st.image || !st.info || st.busy) return;
+    st.busy = true; st.code = '';
+    show($('runErr'), '');
+    $('status').textContent = '審判が鑑定しています……';
+    render();
+    ctl = new AbortController();
+    const prompt = `${INSTRUCTIONS}\n\n-----\n\n${st.req}\n\n（添付のコラージュ画像が、上の依頼文の画像です。）`;
+    try {
+      const data = await sample.json(prompt, {
+        images: [st.image],
+        signal: ctl.signal,
+        cache: fresh ? false : true,
+        onText: () => { $('status').textContent = '審判が書いています……'; },
+      });
+      const c = check(data);
+      if (c.fatal) { show($('runErr'), c.fatal + '「鑑定する」をもう一度押してください。'); $('status').textContent = ''; return; }
+      st.code = await encode(JSON.stringify(data));
+      $('status').textContent = '鑑定が終わりました。';
+      $('outMsg').textContent = `${st.info.names.join('・')} の ${c.count}体分の鑑定ができました。`;
+      show($('outWarn'), c.notes.join('。') + (c.notes.length ? '。' : ''));
+      $('outCode').textContent = `${st.code.slice(0, 24)}…（${st.code.length}文字）`;
+      $('fallback').hidden = true;
+      $('fallback').value = st.code;
+    } catch (e) {
+      $('status').textContent = '';
+      if (e?.code === 'cancelled') { $('status').textContent = '止めました。'; }
+      else show($('runErr'), ERR[e?.code] || '通信がうまくいきませんでした。少し待ってからもう一度押してください。');
+    } finally {
+      st.busy = false; ctl = null;
+      render();
+    }
+  }
+
+  $('runBtn').addEventListener('click', () => run(false));
+  $('againBtn').addEventListener('click', () => run(true));
+  $('stopBtn').addEventListener('click', () => ctl?.abort());
+
+  $('copyBtn').addEventListener('click', () => {
+    const done = () => { $('copyBtn').textContent = 'コピーしました'; setTimeout(() => { $('copyBtn').textContent = '結果をコピー'; }, 2500); };
+    const fallback = () => {
+      const ta = $('fallback');
+      ta.hidden = false; ta.value = st.code; ta.focus(); ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { ok = false; }
+      if (ok) done(); else $('copyBtn').textContent = '下の欄を選んでコピーしてください';
+    };
+    try {
+      navigator.clipboard.writeText(st.code).then(done, fallback);
+    } catch { fallback(); }
+  });
+
+  // ---------- Claude につなぐ ----------
+  render();
+  $('status').textContent = 'Claude につないでいます……';
+  (async () => {
+    try {
+      const s = await window.claude?.use?.('sample');
+      if (!s) throw new Error('none');
+      const lim = await s.limits().catch(() => null);
+      if (!lim?.images) {
+        $('status').textContent = '';
+        show($('runErr'), 'この表示環境では画像を Claude に送れません。ブラウザで claude.ai にログインして、このページを開いてください。');
+        return;
+      }
+      sample = s;
+      $('status').textContent = '';
+    } catch {
+      $('status').textContent = '';
+      show($('runErr'), 'Claude につなげませんでした。claude.ai にログインした状態で、このページを開いてください（共有リンクを開いただけの人は使えません）。');
+    }
+    render();
+  })();
+})();
+</script>

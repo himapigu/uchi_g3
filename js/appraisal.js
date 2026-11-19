@@ -141,9 +141,23 @@ function normSkill(raw, i, fighterType, warn, who) {
   };
 }
 
+/** ファイター名からプレイヤー名（と「たろうの」「（たろう）」などのつなぎ）を取り除く */
+function stripPlayer(name, playerName) {
+  if (typeof name !== 'string' || !playerName || !name.includes(playerName)) return name;
+  const out = name.split(playerName).join(' ')
+    .replace(/^[\s　]*(の|ん?ち?の|家の)/, '')
+    .replace(/[（(【\[「][\s　]*[）)】\]」]/g, '')
+    .replace(/[\s　]+/g, ' ')
+    .trim();
+  return out || name.replace(playerName, '').trim();
+}
+
 function normFighter(raw, playerName, no, teamSize, warn) {
   const f = raw && typeof raw === 'object' ? raw : {};
-  const who = teamSize > 1 ? `${playerName} #${no}` : playerName;
+  if (typeof f.name === 'string' && playerName && f.name.includes(playerName)) {
+    warn(`${playerName} のファイター名にプレイヤー名が入っていたので外しました`);
+  }
+  const who =teamSize > 1 ? `${playerName} #${no}` : playerName;
   let type = normType(f.type);
   if (!type) { warn(`${who} の属性 "${f.type}" は一覧にないので「無」にしました`); type = '無'; }
 
@@ -192,7 +206,7 @@ function normFighter(raw, playerName, no, teamSize, warn) {
   return {
     player: playerName,
     no,
-    name: str(f.name, 30, `${playerName}のうちの子${teamSize > 1 ? no : ''}`),
+    name: str(stripPlayer(f.name, playerName), 30, `うちの子${teamSize > 1 ? no : ''}`),
     type,
     stats,
     skills,
