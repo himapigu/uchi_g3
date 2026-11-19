@@ -129,7 +129,7 @@ details ul { margin: 6px 0 0; padding-left: 1.2em; }
 
   <section class="card" aria-labelledby="h-paste">
     <h2 id="h-paste"><span class="n">1</span>ゲームからコピーして、ここに貼る</h2>
-    <p class="hint">ゲームの鑑定画面で「鑑定室用にまとめてコピー」を押し、この枠に1回貼り付けてください（コピー時のプレビューにも中身は出ません）。「画像をコピー」と「依頼文をコピー」を1つずつ貼っても使えます。</p>
+    <p class="hint">ゲームの鑑定画面で「画像をコピー」と「依頼文をコピー」を押し、そのたびにこの枠で貼り付けてください。順番はどちらでもかまいません。</p>
     <div id="zone" class="zone" contenteditable="true" spellcheck="false" role="textbox" aria-label="貼り付け先" tabindex="0">
       <div>ここをクリックして <kbd>Ctrl</kbd>+<kbd>V</kbd><br><span style="font-size:13px">スマホは長押しして「貼り付け」／画像ファイルのドロップも可</span></div>
     </div>
@@ -281,22 +281,7 @@ details ul { margin: 6px 0 0; padding-left: 1.2em; }
     render();
   }
 
-  // ゲームの「鑑定室用にまとめてコピー」：画像と依頼文を base64 にした文字列
-  async function takePack(text) {
-    try {
-      const bin = atob(text.trim().replace(/^UCHINOKO-PACK1\s*:/, '').replace(/\s+/g, ''));
-      const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
-      const pack = JSON.parse(new TextDecoder().decode(bytes));
-      const blob = await (await fetch(pack.i)).blob();
-      takeText(pack.r);
-      await takeImage(new File([blob], 'collage.png', { type: blob.type || 'image/png' }));
-    } catch {
-      show($('pasteErr'), 'まとめてコピーした文字列を読めませんでした。ゲームでもう一度コピーしてください。');
-    }
-  }
-
   function takeText(text) {
-    if (/^\s*UCHINOKO-PACK1\s*:/.test(text)) { takePack(text); return; }
     const info = parseRequest(text);
     if (!info) {
       if (/UCHINOKO[12]\s*[:：]/.test(text)) {

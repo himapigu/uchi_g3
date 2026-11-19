@@ -668,11 +668,6 @@ MOUNT.appraise = () => {
     <section class="panel host-panel">
       <h3>ホスト作業：鑑定</h3>
       <p class="hint">画像を読めるチャットAIなら、どれでも使えます（Claude、ChatGPT、Gemini など）。</p>
-      <div class="row">
-        <button id="copyPack" class="primary">鑑定室用にまとめてコピー</button>
-      </div>
-      <div class="hint">「うちの子 鑑定室」を使うときはこちら。画像と依頼文を読めない文字列にしてコピーするので、コピー時のプレビューにも中身が出ません。鑑定室で1回貼るだけで済みます。</div>
-      <p class="hint">チャットAIに直接貼るときは、下の手順でどうぞ（画像のコピーでは、端末によってプレビューが出ます）。</p>
       <ol class="steps">
         <li>
           <button id="copyImg" class="primary">画像をコピー</button>
@@ -724,28 +719,6 @@ MOUNT.appraise = () => {
     } catch {
       toast('このブラウザでは画像をコピーできませんでした。保存して添付してください', 5000);
       await downloadCanvas(await getCollage(), `uchinoko_${H.st.code}.png`);
-    }
-  });
-  // 画像＋依頼文を base64 の文字列1本にまとめる（OS のクリップボードプレビューで中身が見えないように）
-  const buildPack = async () => {
-    const c = await getCollage();
-    const dataUrl = c.toDataURL('image/png');
-    const json = JSON.stringify({ v: 1, r: requestText(hostAction.groups()), i: dataUrl });
-    const bytes = new TextEncoder().encode(json);
-    let bin = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    return 'UCHINOKO-PACK1:' + btoa(bin);
-  };
-  $('#copyPack').addEventListener('click', async () => {
-    const done = () => toast('コピーしました。鑑定室の枠に貼り付けてください');
-    try {
-      // Promise を渡すと、クリック直後の扱いのまま非同期で作れる（Safari 対策）
-      const blob = buildPack().then((t) => new Blob([t], { type: 'text/plain' }));
-      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
-      done();
-    } catch {
-      try { await navigator.clipboard.writeText(await buildPack()); done(); }
-      catch { toast('コピーできませんでした。画像を保存して鑑定室で選んでください', 5000); }
     }
   });
   $('#saveImg').addEventListener('click', async () => {
